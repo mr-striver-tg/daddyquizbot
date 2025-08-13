@@ -16,7 +16,7 @@ quiz_storage = {}  # {quiz_id: {'title':..., 'description':..., 'questions':[...
 user_quiz_data = {}  # {user_id: {'state':..., 'current_quiz': {...}}}
 
 # Bot token
-BOT_TOKEN = "<YOUR_BOT_TOKEN>"
+BOT_TOKEN = "<8266633263:AAEm8u_rjrSRENi52vmUWtAjL4RxsU_HsZU>"
 
 # States
 STATE_TITLE = 1
