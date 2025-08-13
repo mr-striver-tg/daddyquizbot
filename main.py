@@ -1,125 +1,124 @@
 import logging
 import uuid
-from telegram import (
-    Update,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-    InputFile
-)
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
-    ApplicationBuilder,
-    CommandHandler,
-    MessageHandler,
-    CallbackQueryHandler,
-    ContextTypes,
-    filters,
+    ApplicationBuilder, CommandHandler, MessageHandler, filters,
+    ContextTypes, CallbackQueryHandler
 )
 
+# Enable logging
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
 
 # In-memory storage
-quizzes = {}
-user_sessions = {}
+quiz_storage = {}  # {quiz_id: {'title':..., 'description':..., 'questions':[...]} }
+user_quiz_data = {}  # {user_id: {'state':..., 'current_quiz': {...}}}
 
-# Start command with optional quiz_id argument
+# Bot token
+BOT_TOKEN = "<YOUR_BOT_TOKEN>"
+
+# States
+STATE_TITLE = 1
+STATE_DESC = 2
+STATE_QUESTION = 3
+
+# Start new quiz
+async def newquiz(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
+    user_quiz_data[user_id] = {'state': STATE_TITLE, 'current_quiz': {'questions': []}}
+    await update.message.reply_text("Please send the quiz title:")
+
+# Handle messages based on state
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
+    if user_id not in user_quiz_data:
+        await update.message.reply_text("Send /newquiz to start creating a quiz.")
+        return
+
+    user_data = user_quiz_data[user_id]
+    state = user_data['state']
+    text = update.message.text.strip()
+
+    if state == STATE_TITLE:
+        user_data['current_quiz']['title'] = text
+        user_data['state'] = STATE_DESC
+        await update.message.reply_text("Send the quiz description:")
+    elif state == STATE_DESC:
+        user_data['current_quiz']['description'] = text
+        user_data['state'] = STATE_QUESTION
+        await update.message.reply_text(
+            "Send each question in this format:\n"
+            "Question?/प्रश्न?\n"
+            "️ Option1 ✅\n"
+            "️ Option2\n"
+            "️ Option3\n"
+            "️ Option4\n"
+            "Send /done when all questions are added."
+        )
+    elif state == STATE_QUESTION:
+        if text.lower() == "/done":
+            await send_quiz(update, context)
+            del user_quiz_data[user_id]  # clear temp data
+            return
+        else:
+            user_data['current_quiz']['questions'].append(text)
+            await update.message.reply_text("Question added. Send next question or /done when finished.")
+
+# Send quiz HTML and buttons
+async def send_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
+    quiz_data = user_quiz_data[user_id]['current_quiz']
+    quiz_id = str(uuid.uuid4())
+    quiz_storage[quiz_id] = quiz_data
+
+    # Generate HTML
+    html_content = f"<html><head><title>{quiz_data['title']}</title></head><body>"
+    html_content += f"<h1>{quiz_data['title']}</h1><p>{quiz_data['description']}</p>"
+    for q in quiz_data['questions']:
+        html_content += f"<p>{q}</p>"
+    html_content += "</body></html>"
+
+    file_name = f"{quiz_id}.html"
+    with open(file_name, "w", encoding="utf-8") as f:
+        f.write(html_content)
+
+    # Send HTML file
+    await update.message.reply_document(open(file_name, "rb"))
+
+    # Send inline buttons
+    bot_username = context.bot.username
+    buttons = [
+        [InlineKeyboardButton("Start Quiz", url=f"https://t.me/{bot_username}?start={quiz_id}")],
+        [InlineKeyboardButton("Start in Group", switch_inline_query=quiz_id)],
+        [InlineKeyboardButton("Share Quiz", switch_inline_query=quiz_id)]
+    ]
+    markup = InlineKeyboardMarkup(buttons)
+    await update.message.reply_text("Your quiz is ready! Use these options:", reply_markup=markup)
+
+# Handle /start <quiz_id>
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = context.args
     if args:
         quiz_id = args[0]
-        if quiz_id in quizzes:
-            quiz = quizzes[quiz_id]
-            keyboard = [
-                [InlineKeyboardButton("Start Quiz (Private)", url=f"https://t.me/{context.bot.username}?start={quiz_id}")],
-                [InlineKeyboardButton("Start in Group", switch_inline_query=quiz_id)],
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            await update.message.reply_text(
-                f"🎉 Quiz: {quiz['title']}\n\n{quiz['description']}",
-                reply_markup=reply_markup
-            )
+        quiz = quiz_storage.get(quiz_id)
+        if not quiz:
+            await update.message.reply_text("Quiz not found.")
             return
-    await update.message.reply_text("Welcome! Use /newquiz to create a new quiz.")
-
-# Begin new quiz
-async def new_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
-    user_sessions[user_id] = {"step": "title", "quiz": {"questions": []}}
-    await update.message.reply_text("Enter the title of your quiz:")
-
-# Handle text messages during quiz creation
-async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
-    text = update.message.text
-    if user_id not in user_sessions:
-        return
-
-    session = user_sessions[user_id]
-    quiz = session["quiz"]
-
-    if session["step"] == "title":
-        quiz["title"] = text
-        session["step"] = "description"
-        await update.message.reply_text("Enter the description of your quiz:")
-    elif session["step"] == "description":
-        quiz["description"] = text
-        session["step"] = "question"
-        await update.message.reply_text("Enter question in the format:\nQuestion? \nOption1 ✅\nOption2\nOption3\nOption4\nSend /done when finished.")
-    elif session["step"] == "question":
-        if text != "/done":
-            quiz["questions"].append(text)
-            await update.message.reply_text("Question added! Send next question or /done to finish.")
-        else:
-            # Finish quiz
-            quiz_id = str(uuid.uuid4())
-            quizzes[quiz_id] = quiz
-            del user_sessions[user_id]
-
-            # Save HTML
-            html_file = f"/tmp/{quiz_id}.html"
-            with open(html_file, "w", encoding="utf-8") as f:
-                f.write(f"<html><head><title>{quiz['title']}</title></head><body>")
-                f.write(f"<h1>{quiz['title']}</h1><p>{quiz['description']}</p><ol>")
-                for q in quiz["questions"]:
-                    f.write(f"<li>{q}</li>")
-                f.write("</ol></body></html>")
-
-            keyboard = [
-                [InlineKeyboardButton("Start Quiz (Private)", url=f"https://t.me/{context.bot.username}?start={quiz_id}")],
-                [InlineKeyboardButton("Start in Group", switch_inline_query=quiz_id)],
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-
-            await update.message.reply_document(
-                document=InputFile(html_file),
-                filename=f"{quiz['title']}.html",
-                caption="Your quiz is ready! You can start or share it using the buttons below.",
-                reply_markup=reply_markup
-            )
-
-# Optional: Inline query handler for sharing in group
-async def inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.inline_query.query
-    results = []
-    if query in quizzes:
-        quiz = quizzes[query]
-        results.append(
-            InlineQueryResultArticle(
-                id=query,
-                title=quiz["title"],
-                input_message_content=InputTextMessageContent(f"Quiz: {quiz['title']}\n\n{quiz['description']}")
-            )
-        )
-    await update.inline_query.answer(results)
+        # Send quiz questions
+        await update.message.reply_text(f"Starting Quiz: {quiz['title']}")
+        for q in quiz['questions']:
+            await update.message.reply_text(q)
+    else:
+        await update.message.reply_text("Welcome! Send /newquiz to create a quiz.")
 
 # Main function
 if __name__ == "__main__":
-    app = ApplicationBuilder().token("8266633263:AAEm8u_rjrSRENi52vmUWtAjL4RxsU_HsZU").build()
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
 
+    app.add_handler(CommandHandler("newquiz", newquiz))
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("newquiz", new_quiz))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
-    app.add_handler(CallbackQueryHandler(lambda update, context: None))  # Placeholder if needed
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
+    print("Bot started...")
     app.run_polling()
