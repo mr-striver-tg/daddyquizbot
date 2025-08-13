@@ -1,18 +1,17 @@
-FROM python:3.10-slim
+# Use slim python base
+FROM python:3.12-slim
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl build-essential && \
-    rm -rf /var/lib/apt/lists/*
-
-# Set working directory
 WORKDIR /app
 
-# Copy project files
-COPY . .
+# Copy files
+COPY main.py .
+COPY quiz_template.html .
 
-# Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
+# Install dependencies
+RUN pip install --no-cache-dir python-telegram-bot==20.6
+
+# Make writable directories for Koyeb
+RUN mkdir -p /tmp/data /tmp/exports
 
 # Run bot
 CMD ["python", "main.py"]
